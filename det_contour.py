@@ -85,6 +85,9 @@ def run_detection(template_path):
                 for m, n in matches:
                     if m.distance < 0.80 * n.distance:
                         good_matches.append(m)
+
+                # Calculate matching percentage
+                match_percentage = (len(good_matches) / len(des_template)) * 100 if len(des_template) > 0 else 0
                 
                 if len(good_matches) > 10:
                     src_pts = np.float32([kp_template[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
@@ -101,6 +104,9 @@ def run_detection(template_path):
                 end_time = time.time()
                 fps = 1 / (end_time - start_time)
                 cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+                # Show similarity score 
+                cv2.putText(frame, f"Similarity: {match_percentage:.2f}%", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
                 
                 result = cv2.drawMatches(template, kp_template, frame, kp_frame, good_matches[:10], None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
                 cv2.imshow('Matched Frame', result)
