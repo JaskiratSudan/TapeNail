@@ -33,11 +33,25 @@ def create_template_from_webcam(output_path):
     if not ret:
         print("Failed to capture image from webcam")
         return None, None
+        
+    # Allow the user to crop the image
+    print("Select the region to crop and press Enter or Space. Press Esc to skip cropping.")
+    roi = cv2.selectROI('Crop Template', img)
     
-    # Save the template in RGB
-    cv2.imwrite(output_path, img)
+    # If the user selects a region
+    if roi != (0, 0, 0, 0):  # ROI is (x, y, w, h)
+        x, y, w, h = roi
+        cropped_img = img[y:y+h, x:x+w]
+        cv2.destroyWindow('Crop Template')
+    else:
+        print("No cropping performed.")
+        cropped_img = img
+        cv2.destroyWindow('Crop Template')
     
-    return img, img
+    # Save the cropped template
+    cv2.imwrite(output_path, cropped_img)
+    
+    return cropped_img, img
 
 # Usage
 output_path = 'templets/template_from_webcam.png'
