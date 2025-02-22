@@ -1,126 +1,176 @@
 package com.example.tapenail_yolo
 
-import android.annotation.SuppressLint
+import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.SurfaceTexture
-import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CameraDevice
-import android.hardware.camera2.CameraManager
+import android.graphics.Matrix
 import android.os.Bundle
-import android.os.Handler
-import android.os.HandlerThread
-import android.view.Surface
-import android.view.TextureView
-import android.widget.ImageView
-import androidx.activity.enableEdgeToEdge
+import android.util.Log
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.AspectRatio
+import androidx.camera.core.Camera
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
+import com.example.tapenail_yolo.Constants.LABEL_PATH
+import com.example.tapenail_yolo.Constants.MODEL_PATH
+import com.example.tapenail_yolo.databinding.ActivityMainBinding
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), Detector.DetectorListener {
+    private lateinit var binding: ActivityMainBinding
+    private val isFrontCamera = false
 
-    lateinit var bitmap: Bitmap
-    lateinit var imageView: ImageView
-    lateinit var cameraDevice: CameraDevice
-    lateinit var handler: Handler
-    lateinit var textureView: TextureView
-    lateinit var cameraManager: CameraManager
+    private var preview: Preview? = null
+    private var imageAnalyzer: ImageAnalysis? = null
+    private var camera: Camera? = null
+    private var cameraProvider: ProcessCameraProvider? = null
+    private lateinit var detector: Detector
+
+    private lateinit var cameraExecutor: ExecutorService
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContentView(R.layout.activity_main)
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-            insets
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        detector = Detector(baseContext, MODEL_PATH, LABEL_PATH, this)
+        detector.setup()
+
+        if (allPermissionsGranted()) {
+            startCamera()
+        } else {
+            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
         }
-        get_permission()
 
-        val handlerThread = HandlerThread("videoThread")
-        handlerThread.start()
-        handler = Handler(handlerThread.looper)
-
-//        imageView = findViewById(R.id.imageView)
-        textureView = findViewById(R.id.texture)
-        textureView.surfaceTextureListener = object:TextureView.SurfaceTextureListener{
-            override fun onSurfaceTextureAvailable(
-                surface: SurfaceTexture,
-                width: Int,
-                height: Int
-            ) {
-                open_camera(surface)
-            }
-
-            override fun onSurfaceTextureSizeChanged(
-                surface: SurfaceTexture,
-                width: Int,
-                height: Int
-            ) {
-
-            }
-
-            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                return false
-            }
-
-            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
-                bitmap = textureView.bitmap!!
-            }
-        }
-        cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
-
+        cameraExecutor = Executors.newSingleThreadExecutor()
     }
 
-    @SuppressLint("MissingPermission")
-    fun open_camera(surface:SurfaceTexture){
-        cameraManager.openCamera(cameraManager.cameraIdList[0], object: CameraDevice.StateCallback(){
-            override fun onOpened(camera: CameraDevice) {
-                cameraDevice = camera
-
-                var surfaceTexture = textureView.surfaceTexture
-                var surface = Surface(surfaceTexture)
-
-                var captureRequest = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-                captureRequest.addTarget(surface)
-
-                cameraDevice.createCaptureSession(listOf(surface), object: CameraCaptureSession.StateCallback(){
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        session.setRepeatingRequest(captureRequest.build(), null, null)
-                    }
-
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        TODO("Not yet implemented")
-                    }
-                }, handler)
-            }
-
-            override fun onDisconnected(camera: CameraDevice) {
-                TODO("Not yet implemented")
-            }
-
-            override fun onError(camera: CameraDevice, error: Int) {
-                TODO("Not yet implemented")
-            }
-        }, handler)
+    private fun startCamera() {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        cameraProviderFuture.addListener({
+            cameraProvider  = cameraProviderFuture.get()
+            bindCameraUseCases()
+        }, ContextCompat.getMainExecutor(this))
     }
 
-    fun get_permission() {
-        if(ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED){
-            requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 101)
+    private fun bindCameraUseCases() {
+        val cameraProvider = cameraProvider ?: throw IllegalStateException("Camera initialization failed.")
+
+        val rotation = binding.viewFinder.display.rotation
+
+        val cameraSelector = CameraSelector
+            .Builder()
+            .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+            .build()
+
+        preview =  Preview.Builder()
+            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .setTargetRotation(rotation)
+            .build()
+
+        imageAnalyzer = ImageAnalysis.Builder()
+            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setTargetRotation(binding.viewFinder.display.rotation)
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+            .build()
+
+        imageAnalyzer?.setAnalyzer(cameraExecutor) { imageProxy ->
+            val bitmapBuffer =
+                Bitmap.createBitmap(
+                    imageProxy.width,
+                    imageProxy.height,
+                    Bitmap.Config.ARGB_8888
+                )
+            imageProxy.use { bitmapBuffer.copyPixelsFromBuffer(imageProxy.planes[0].buffer) }
+            imageProxy.close()
+
+            val matrix = Matrix().apply {
+                postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+
+                if (isFrontCamera) {
+                    postScale(
+                        -1f,
+                        1f,
+                        imageProxy.width.toFloat(),
+                        imageProxy.height.toFloat()
+                    )
+                }
+            }
+
+            val rotatedBitmap = Bitmap.createBitmap(
+                bitmapBuffer, 0, 0, bitmapBuffer.width, bitmapBuffer.height,
+                matrix, true
+            )
+
+            detector.detect(rotatedBitmap)
+        }
+
+        cameraProvider.unbindAll()
+
+        try {
+            camera = cameraProvider.bindToLifecycle(
+                this,
+                cameraSelector,
+                preview,
+                imageAnalyzer
+            )
+
+            preview?.setSurfaceProvider(binding.viewFinder.surfaceProvider)
+        } catch(exc: Exception) {
+            Log.e(TAG, "Use case binding failed", exc)
         }
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if(grantResults[0]!=PackageManager.PERMISSION_GRANTED){
-            get_permission()
+    private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
+        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()) {
+        if (it[Manifest.permission.CAMERA] == true) { startCamera() }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        detector.clear()
+        cameraExecutor.shutdown()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (allPermissionsGranted()){
+            startCamera()
+        } else {
+            requestPermissionLauncher.launch(REQUIRED_PERMISSIONS)
+        }
+    }
+
+    companion object {
+        private const val TAG = "Camera"
+        private const val REQUEST_CODE_PERMISSIONS = 10
+        private val REQUIRED_PERMISSIONS = mutableListOf (
+            Manifest.permission.CAMERA
+        ).toTypedArray()
+    }
+
+    override fun onEmptyDetect() {
+        binding.overlay.invalidate()
+    }
+
+    override fun onDetect(boundingBoxes: List<BoundingBox>, inferenceTime: Long) {
+        runOnUiThread {
+            binding.inferenceTime.text = "${inferenceTime}ms"
+            binding.overlay.apply {
+                setResults(boundingBoxes)
+                invalidate()
+            }
         }
     }
 }
