@@ -14,6 +14,7 @@ image_files = [os.path.join(test_folder, f) for f in os.listdir(test_folder) if 
 
 # Run batched inference on the images
 results = model(image_files, stream=True)
+print("Results Shape --->", len(results))
 
 # Process results generator
 for i, result in enumerate(results):

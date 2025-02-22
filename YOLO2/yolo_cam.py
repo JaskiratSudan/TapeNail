@@ -22,6 +22,7 @@ while True:
         break
 
     results = model(img, stream=True)
+    print("Results Shape --->", results.shape())
 
     # Coordinates
     y_offset = 10  # Offset for displaying cutouts
