@@ -2,7 +2,7 @@ import os
 from ultralytics import YOLO
 
 # Load the pretrained YOLO model
-model = YOLO("Best (1).pt")
+model = YOLO("content/YOLO_Segmentation/yolo_segmentation/weights/best.pt")
 
 # Specify the paths for the 'test' folder and 'output' folder
 test_folder = "dataset/test/images"
@@ -14,7 +14,7 @@ image_files = [os.path.join(test_folder, f) for f in os.listdir(test_folder) if 
 
 # Run batched inference on the images
 results = model(image_files, stream=True)
-print("Results Shape --->", len(results))
+# print("Results Shape --->", len(results))
 
 # Process results generator
 for i, result in enumerate(results):

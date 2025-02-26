@@ -1,176 +1,268 @@
 package com.example.tapenail_yolo
 
-import android.Manifest
+import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.Matrix
+import android.graphics.RectF
+import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CameraManager
 import android.os.Bundle
-import android.util.Log
-import androidx.activity.result.contract.ActivityResultContracts
+import android.os.Handler
+import android.os.HandlerThread
+import android.view.Surface
+import android.view.TextureView
+import android.widget.ImageView
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.AspectRatio
-import androidx.camera.core.Camera
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.core.app.ActivityCompat
+import android.graphics.Paint
+import android.graphics.Color
+import android.graphics.Canvas
+import android.util.Log
 import androidx.core.content.ContextCompat
-import com.example.tapenail_yolo.Constants.LABEL_PATH
-import com.example.tapenail_yolo.Constants.MODEL_PATH
-import com.example.tapenail_yolo.databinding.ActivityMainBinding
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import org.tensorflow.lite.Interpreter
+import java.io.FileInputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.MappedByteBuffer
+import java.nio.channels.FileChannel
+import kotlin.math.max
+import kotlin.math.min
 
-class MainActivity : AppCompatActivity(), Detector.DetectorListener {
-    private lateinit var binding: ActivityMainBinding
-    private val isFrontCamera = false
+@Suppress("DEPRECATION", "NAME_SHADOWING")
+class MainActivity : AppCompatActivity() {
 
-    private var preview: Preview? = null
-    private var imageAnalyzer: ImageAnalysis? = null
-    private var camera: Camera? = null
-    private var cameraProvider: ProcessCameraProvider? = null
-    private lateinit var detector: Detector
+    private lateinit var bitmap: Bitmap
+    private lateinit var imageView: ImageView
+    private lateinit var cameraDevice: CameraDevice
+    private lateinit var handler: Handler
+    private lateinit var textureView: TextureView
+    private lateinit var cameraManager: CameraManager
+    private lateinit var tflite: Interpreter
+    private lateinit var labels: List<String>
 
-    private lateinit var cameraExecutor: ExecutorService
+    // Reusable objects
+    private val inputBuffer = ByteBuffer.allocateDirect(4 * 256 * 256 * 3).order(ByteOrder.nativeOrder())
+    private val outputBuffer = Array(1) { Array(5) { FloatArray(1344) } }
+    private val paint = Paint().apply {
+        color = Color.RED
+        style = Paint.Style.STROKE
+        strokeWidth = 5f
+        textSize = 40f
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
+        enableEdgeToEdge()
+        setContentView(R.layout.activity_main)
 
-        detector = Detector(baseContext, MODEL_PATH, LABEL_PATH, this)
-        detector.setup()
+        // Initialize imageView
+        imageView = findViewById(R.id.imageView)
 
-        if (allPermissionsGranted()) {
-            startCamera()
-        } else {
-            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
-        }
+        // Other initialization code
+        get_permission()
+        tflite = Interpreter(loadModelFile())
+        labels = loadLabelList()
 
-        cameraExecutor = Executors.newSingleThreadExecutor()
-    }
+        val handlerThread = HandlerThread("videoThread")
+        handlerThread.start()
+        handler = Handler(handlerThread.looper)
 
-    private fun startCamera() {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-        cameraProviderFuture.addListener({
-            cameraProvider  = cameraProviderFuture.get()
-            bindCameraUseCases()
-        }, ContextCompat.getMainExecutor(this))
-    }
+        textureView = findViewById(R.id.texture)
+        textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                open_camera(surface)
+            }
 
-    private fun bindCameraUseCases() {
-        val cameraProvider = cameraProvider ?: throw IllegalStateException("Camera initialization failed.")
+            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
 
-        val rotation = binding.viewFinder.display.rotation
+            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                return false
+            }
 
-        val cameraSelector = CameraSelector
-            .Builder()
-            .requireLensFacing(CameraSelector.LENS_FACING_BACK)
-            .build()
-
-        preview =  Preview.Builder()
-            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-            .setTargetRotation(rotation)
-            .build()
-
-        imageAnalyzer = ImageAnalysis.Builder()
-            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setTargetRotation(binding.viewFinder.display.rotation)
-            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-            .build()
-
-        imageAnalyzer?.setAnalyzer(cameraExecutor) { imageProxy ->
-            val bitmapBuffer =
-                Bitmap.createBitmap(
-                    imageProxy.width,
-                    imageProxy.height,
-                    Bitmap.Config.ARGB_8888
-                )
-            imageProxy.use { bitmapBuffer.copyPixelsFromBuffer(imageProxy.planes[0].buffer) }
-            imageProxy.close()
-
-            val matrix = Matrix().apply {
-                postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
-
-                if (isFrontCamera) {
-                    postScale(
-                        -1f,
-                        1f,
-                        imageProxy.width.toFloat(),
-                        imageProxy.height.toFloat()
-                    )
+            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+                bitmap = textureView.bitmap!!
+                handler.post {
+                    val results = runInference(bitmap)
+                    drawDetectionResults(results)
                 }
             }
-
-            val rotatedBitmap = Bitmap.createBitmap(
-                bitmapBuffer, 0, 0, bitmapBuffer.width, bitmapBuffer.height,
-                matrix, true
-            )
-
-            detector.detect(rotatedBitmap)
         }
 
-        cameraProvider.unbindAll()
-
-        try {
-            camera = cameraProvider.bindToLifecycle(
-                this,
-                cameraSelector,
-                preview,
-                imageAnalyzer
-            )
-
-            preview?.setSurfaceProvider(binding.viewFinder.surfaceProvider)
-        } catch(exc: Exception) {
-            Log.e(TAG, "Use case binding failed", exc)
-        }
+        cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
     }
 
-    private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
-        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
-    }
+    @SuppressLint("MissingPermission")
+    private fun open_camera(surface: SurfaceTexture) {
+        cameraManager.openCamera(cameraManager.cameraIdList[0], object : CameraDevice.StateCallback() {
+            override fun onOpened(camera: CameraDevice) {
+                cameraDevice = camera
 
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()) {
-        if (it[Manifest.permission.CAMERA] == true) { startCamera() }
-    }
+                val surfaceTexture = textureView.surfaceTexture
+                val surface = Surface(surfaceTexture)
 
-    override fun onDestroy() {
-        super.onDestroy()
-        detector.clear()
-        cameraExecutor.shutdown()
-    }
+                val captureRequest = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                captureRequest.addTarget(surface)
 
-    override fun onResume() {
-        super.onResume()
-        if (allPermissionsGranted()){
-            startCamera()
-        } else {
-            requestPermissionLauncher.launch(REQUIRED_PERMISSIONS)
-        }
-    }
+                cameraDevice.createCaptureSession(listOf(surface), object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        session.setRepeatingRequest(captureRequest.build(), null, null)
+                    }
 
-    companion object {
-        private const val TAG = "Camera"
-        private const val REQUEST_CODE_PERMISSIONS = 10
-        private val REQUIRED_PERMISSIONS = mutableListOf (
-            Manifest.permission.CAMERA
-        ).toTypedArray()
-    }
-
-    override fun onEmptyDetect() {
-        binding.overlay.invalidate()
-    }
-
-    override fun onDetect(boundingBoxes: List<BoundingBox>, inferenceTime: Long) {
-        runOnUiThread {
-            binding.inferenceTime.text = "${inferenceTime}ms"
-            binding.overlay.apply {
-                setResults(boundingBoxes)
-                invalidate()
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        Log.e("MainActivity", "Camera session configuration failed")
+                    }
+                }, handler)
             }
+
+            override fun onDisconnected(camera: CameraDevice) {
+                Log.e("MainActivity", "Camera disconnected")
+            }
+
+            override fun onError(camera: CameraDevice, error: Int) {
+                Log.e("MainActivity", "Camera error: $error")
+            }
+        }, handler)
+    }
+
+    private fun get_permission() {
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 101)
+        }
+    }
+
+    private data class DetectionResult(
+        val xmin: Float,
+        val ymin: Float,
+        val xmax: Float,
+        val ymax: Float,
+        val classId: Int,
+        val confidence: Float
+    )
+
+    private fun drawDetectionResults(results: List<DetectionResult>) {
+        runOnUiThread {
+            val canvas = Canvas(bitmap)
+            for (result in results) {
+                // Convert normalized coordinates to pixel coordinates
+                val rect = RectF(
+                    result.xmin * bitmap.width,
+                    result.ymin * bitmap.height,
+                    result.xmax * bitmap.width,
+                    result.ymax * bitmap.height
+                )
+
+                // Draw bounding box
+                canvas.drawRect(rect, paint)
+
+                // Draw label (always "Pattern" for single class)
+                canvas.drawText("Pattern (${result.confidence})", rect.left, rect.top - 10, paint)
+            }
+            imageView.setImageBitmap(bitmap)
+        }
+    }
+
+    private fun convertBitmapToByteBuffer(bitmap: Bitmap) {
+        inputBuffer.rewind() // Reset buffer position
+        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 256, 256, true)
+        val intValues = IntArray(256 * 256)
+        resizedBitmap.getPixels(intValues, 0, 256, 0, 0, 256, 256)
+        val floatBuffer = inputBuffer.asFloatBuffer()
+        for (value in intValues) {
+            floatBuffer.put(((value shr 16) and 0xFF) / 255.0f) // Normalize R
+            floatBuffer.put(((value shr 8) and 0xFF) / 255.0f)  // Normalize G
+            floatBuffer.put((value and 0xFF) / 255.0f)          // Normalize B
+        }
+    }
+
+    private fun runInference(bitmap: Bitmap): List<DetectionResult> {
+        convertBitmapToByteBuffer(bitmap)
+        tflite.run(inputBuffer, outputBuffer)
+
+        val results = mutableListOf<DetectionResult>()
+        val output = outputBuffer[0]
+
+        for (i in 0 until 1344) {
+            val xCenter = output[0][i]
+            val yCenter = output[1][i]
+            val width = output[2][i]
+            val height = output[3][i]
+            val confidence = output[4][i]
+            val classId = 0 // Force classId to 0 for the single class
+
+            if (confidence > 0.75) { // Confidence threshold
+                results.add(
+                    DetectionResult(
+                        xmin = xCenter - width / 2,
+                        ymin = yCenter - height / 2,
+                        xmax = xCenter + width / 2,
+                        ymax = yCenter + height / 2,
+                        classId = classId,
+                        confidence = confidence
+                    )
+                )
+            }
+        }
+
+        // Apply NMS
+        val boxes = results.map { RectF(it.xmin, it.ymin, it.xmax, it.ymax) }
+        val scores = results.map { it.confidence }
+        val selectedIndices = applyNMS(boxes, scores, iouThreshold = 0.5f)
+
+        return selectedIndices.map { results[it] }
+    }
+
+    private fun applyNMS(boxes: List<RectF>, scores: List<Float>, iouThreshold: Float = 0.5f): List<Int> {
+        val selectedIndices = mutableListOf<Int>()
+        val sortedIndices = scores.indices.sortedByDescending { scores[it] }
+
+        for (i in sortedIndices) {
+            var shouldSelect = true
+            for (j in selectedIndices) {
+                if (iou(boxes[i], boxes[j]) > iouThreshold) {
+                    shouldSelect = false
+                    break
+                }
+            }
+            if (shouldSelect) {
+                selectedIndices.add(i)
+            }
+        }
+
+        return selectedIndices
+    }
+
+    private fun iou(boxA: RectF, boxB: RectF): Float {
+        val xA = max(boxA.left, boxB.left)
+        val yA = max(boxA.top, boxB.top)
+        val xB = min(boxA.right, boxB.right)
+        val yB = min(boxA.bottom, boxB.bottom)
+
+        val interArea = max(0f, xB - xA) * max(0f, yB - yA)
+        val boxAArea = (boxA.right - boxA.left) * (boxA.bottom - boxA.top)
+        val boxBArea = (boxB.right - boxB.left) * (boxB.bottom - boxB.top)
+
+        return interArea / (boxAArea + boxBArea - interArea)
+    }
+
+    private fun loadModelFile(): MappedByteBuffer {
+        val fileDescriptor = assets.openFd("best_float16.tflite")
+        val inputStream = FileInputStream(fileDescriptor.fileDescriptor)
+        val fileChannel = inputStream.channel
+        val startOffset = fileDescriptor.startOffset
+        val declaredLength = fileDescriptor.declaredLength
+        return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+    }
+
+    private fun loadLabelList(): List<String> {
+        return assets.open("labels.txt").bufferedReader().useLines { it.toList() }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (grantResults[0] != PackageManager.PERMISSION_GRANTED) {
+            get_permission()
         }
     }
 }

@@ -19,6 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "TapeNail_Yolo"
+rootProject.name = "TapeNail_yolo"
 include(":app")
- 

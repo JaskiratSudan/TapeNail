@@ -8,7 +8,7 @@ cap.set(3, 640)  # Set width
 cap.set(4, 480)  # Set height
 
 # Load model
-model = YOLO("Best (1).pt")
+model = YOLO("content/YOLOV11_det/yolov11_det/weights/best.pt")
 
 # Object classes
 classNames = ["Pattern"]
@@ -22,7 +22,7 @@ while True:
         break
 
     results = model(img, stream=True)
-    print("Results Shape --->", results.shape())
+    # print("Results Shape --->", results.shape())
 
     # Coordinates
     y_offset = 10  # Offset for displaying cutouts
