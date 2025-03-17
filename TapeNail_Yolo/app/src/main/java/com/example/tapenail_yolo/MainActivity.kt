@@ -2,6 +2,7 @@ package com.example.tapenail_yolo
 
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.RectF
 import android.graphics.SurfaceTexture
@@ -19,8 +20,15 @@ import androidx.appcompat.app.AppCompatActivity
 import android.graphics.Paint
 import android.graphics.Color
 import android.graphics.Canvas
+import android.media.MediaPlayer
+import android.media.RingtoneManager
+import android.os.Looper
 import android.util.Log
+import android.view.Gravity
+import android.widget.RelativeLayout
+import android.widget.TextView
 import androidx.core.content.ContextCompat
+import com.airbnb.lottie.LottieAnimationView
 import org.tensorflow.lite.Interpreter
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -42,9 +50,30 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tflite: Interpreter
     private lateinit var labels: List<String>
 
-    // Reusable objects
-    private val inputBuffer = ByteBuffer.allocateDirect(4 * 256 * 256 * 3).order(ByteOrder.nativeOrder())
-    private val outputBuffer = Array(1) { Array(5) { FloatArray(1344) } }
+    private var isUnlocked = false
+    private var detectionStartTime: Long = 0
+    private val requiredDetectionDuration = 5000L // 5 seconds
+    //    private val handler = Handler(Looper.getMainLooper())
+    private lateinit var mediaPlayer: MediaPlayer
+    private var isDetectionRunning = false
+
+    private val MODEL_INPUT_WIDTH = 256
+    private val MODEL_INPUT_HEIGHT = 256
+    private val MODEL_OUTPUT_NUM_ELEMENTS = 1344
+    private val MODEL_NUM_CLASSES = 7 // Update this based on your labels
+    private val CLASS_COLORS = listOf(
+        Color.RED, Color.BLUE, Color.GREEN, Color.YELLOW,
+        Color.CYAN, Color.MAGENTA, Color.GRAY, Color.WHITE,
+        Color.rgb(255, 165, 0) // Orange
+    )
+
+// Original (for 256x256)
+// private val inputBuffer = ByteBuffer.allocateDirect(4 * 256 * 256 * 3)
+
+    // New (for 640x640)
+    // Update buffer initialization
+    private val inputBuffer = ByteBuffer.allocateDirect(4 * MODEL_INPUT_WIDTH * MODEL_INPUT_HEIGHT * 3).order(ByteOrder.nativeOrder())
+    private val outputBuffer = Array(1) { Array(4 + MODEL_NUM_CLASSES) { FloatArray(MODEL_OUTPUT_NUM_ELEMENTS) } }
     private val paint = Paint().apply {
         color = Color.RED
         style = Paint.Style.STROKE
@@ -82,10 +111,13 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
-                bitmap = textureView.bitmap!!
-                handler.post {
-                    val results = runInference(bitmap)
-                    drawDetectionResults(results)
+                if (!isUnlocked) {
+                    bitmap = textureView.bitmap!!
+                    handler.post {
+                        val croppedBitmap = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
+                        val results = runInference(croppedBitmap)
+                        drawDetectionResults(results)
+                    }
                 }
             }
         }
@@ -144,38 +176,148 @@ class MainActivity : AppCompatActivity() {
     private fun drawDetectionResults(results: List<DetectionResult>) {
         runOnUiThread {
             val canvas = Canvas(bitmap)
+            var targetClassDetected = false
+
             for (result in results) {
-                // Convert normalized coordinates to pixel coordinates
-                val rect = RectF(
-                    result.xmin * bitmap.width,
-                    result.ymin * bitmap.height,
-                    result.xmax * bitmap.width,
-                    result.ymax * bitmap.height
-                )
+                // Draw bounding boxes as before
 
-                // Draw bounding box
-                canvas.drawRect(rect, paint)
-
-                // Draw label (always "Pattern" for single class)
-                canvas.drawText("Pattern (${result.confidence})", rect.left, rect.top - 10, paint)
+                // Check if target class (e.g., class 0) is detected
+                if (result.classId == 6 && result.confidence > 0.7) {
+                    targetClassDetected = true
+                }
             }
+
+            if (!isUnlocked) {
+                handlePatternDetection(targetClassDetected)
+            }
+
             imageView.setImageBitmap(bitmap)
         }
     }
 
-    private fun convertBitmapToByteBuffer(bitmap: Bitmap) {
-        inputBuffer.rewind() // Reset buffer position
-        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 256, 256, true)
-        val intValues = IntArray(256 * 256)
-        resizedBitmap.getPixels(intValues, 0, 256, 0, 0, 256, 256)
-        val floatBuffer = inputBuffer.asFloatBuffer()
-        for (value in intValues) {
-            floatBuffer.put(((value shr 16) and 0xFF) / 255.0f) // Normalize R
-            floatBuffer.put(((value shr 8) and 0xFF) / 255.0f)  // Normalize G
-            floatBuffer.put((value and 0xFF) / 255.0f)          // Normalize B
+    private fun handlePatternDetection(detected: Boolean) {
+        if (detected) {
+            if (!isDetectionRunning) {
+                detectionStartTime = System.currentTimeMillis()
+                isDetectionRunning = true
+                startUnlockCountdown()
+            }
+        } else {
+            resetDetection()
         }
     }
 
+    private fun startUnlockCountdown() {
+        handler.postDelayed({
+            val elapsedTime = System.currentTimeMillis() - detectionStartTime
+            if (elapsedTime >= requiredDetectionDuration && !isUnlocked) {
+                unlockPhone()
+            } else if (isDetectionRunning) {
+                startUnlockCountdown()
+            }
+        }, 100)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (::mediaPlayer.isInitialized) {
+            mediaPlayer.release()
+        }
+        handler.removeCallbacksAndMessages(null)
+        if (::cameraDevice.isInitialized) {
+            cameraDevice.close()
+        }
+    }
+
+    private fun resetAllDetection() {
+        isUnlocked = false
+        isDetectionRunning = false
+        detectionStartTime = 0
+    }
+
+    private fun resetDetection() {
+        isDetectionRunning = false
+        handler.removeCallbacksAndMessages(null)
+    }
+
+    private fun unlockPhone() {
+        isUnlocked = true
+        try {
+            cameraDevice.close()
+
+            // System default notification sound
+            val notification = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            RingtoneManager.getRingtone(this, notification).play()
+
+            // System default animation
+            showSystemUnlockAnimation()
+
+            showUnlockedMessage()
+
+        } catch (e: Exception) {
+            Log.e("UnlockError", "Error: ${e.message}")
+        }
+    }
+
+    private fun showSystemUnlockAnimation() {
+        runOnUiThread {
+            val imageView = ImageView(this).apply {
+                setImageResource(android.R.drawable.ic_lock_lock)
+                layoutParams = RelativeLayout.LayoutParams(200, 200).apply {
+                    addRule(RelativeLayout.CENTER_IN_PARENT)
+                }
+            }
+            findViewById<RelativeLayout>(R.id.main).addView(imageView)
+        }
+    }
+
+    private fun showUnlockedMessage() {
+        runOnUiThread {
+            val textView = TextView(this).apply {
+                text = "PHONE UNLOCKED"
+                textSize = 40f
+                setTextColor(Color.GREEN)
+                gravity = Gravity.CENTER
+            }
+
+            findViewById<RelativeLayout>(R.id.main).addView(textView)
+        }
+    }
+
+    private fun getColorForClass(classId: Int): Int {
+        return CLASS_COLORS[classId % CLASS_COLORS.size]
+    }
+
+    // Update bitmap processing
+    private fun convertBitmapToByteBuffer(bitmap: Bitmap) {
+        inputBuffer.rewind()
+        val resizedBitmap = Bitmap.createScaledBitmap(
+            bitmap,
+            MODEL_INPUT_WIDTH,
+            MODEL_INPUT_HEIGHT,
+            true
+        )
+
+        val intValues = IntArray(MODEL_INPUT_WIDTH * MODEL_INPUT_HEIGHT)
+        resizedBitmap.getPixels(
+            intValues,
+            0,
+            MODEL_INPUT_WIDTH,
+            0,
+            0,
+            MODEL_INPUT_WIDTH,
+            MODEL_INPUT_HEIGHT
+        )
+
+        val floatBuffer = inputBuffer.asFloatBuffer()
+        for (value in intValues) {
+            floatBuffer.put(((value shr 16) and 0xFF) / 255.0f)
+            floatBuffer.put(((value shr 8) and 0xFF) / 255.0f)
+            floatBuffer.put((value and 0xFF) / 255.0f)
+        }
+    }
+
+    // Update inference processing
     private fun runInference(bitmap: Bitmap): List<DetectionResult> {
         convertBitmapToByteBuffer(bitmap)
         tflite.run(inputBuffer, outputBuffer)
@@ -183,34 +325,41 @@ class MainActivity : AppCompatActivity() {
         val results = mutableListOf<DetectionResult>()
         val output = outputBuffer[0]
 
-        for (i in 0 until 1344) {
+        for (i in 0 until MODEL_OUTPUT_NUM_ELEMENTS) {
             val xCenter = output[0][i]
             val yCenter = output[1][i]
             val width = output[2][i]
             val height = output[3][i]
-            val confidence = output[4][i]
-            val classId = 0 // Force classId to 0 for the single class
 
-            if (confidence > 0.75) { // Confidence threshold
+            val classScores = (4 until 4 + MODEL_NUM_CLASSES).map { output[it][i] }
+            val maxScore = classScores.maxOrNull() ?: 0f
+            val classId = classScores.indexOf(maxScore)
+
+            if (maxScore > 0.5f) {
                 results.add(
                     DetectionResult(
-                        xmin = xCenter - width / 2,
-                        ymin = yCenter - height / 2,
-                        xmax = xCenter + width / 2,
-                        ymax = yCenter + height / 2,
+                        xmin = (xCenter - width/2).coerceIn(0f, 1f),
+                        ymin = (yCenter - height/2).coerceIn(0f, 1f),
+                        xmax = (xCenter + width/2).coerceIn(0f, 1f),
+                        ymax = (yCenter + height/2).coerceIn(0f, 1f),
                         classId = classId,
-                        confidence = confidence
+                        confidence = maxScore
                     )
                 )
             }
         }
 
-        // Apply NMS
-        val boxes = results.map { RectF(it.xmin, it.ymin, it.xmax, it.ymax) }
-        val scores = results.map { it.confidence }
-        val selectedIndices = applyNMS(boxes, scores, iouThreshold = 0.5f)
+        return processResults(results)
+    }
 
-        return selectedIndices.map { results[it] }
+    private fun processResults(results: List<DetectionResult>): List<DetectionResult> {
+        return results.groupBy { it.classId }
+            .flatMap { (_, classResults) ->
+                applyNMS(
+                    classResults.map { RectF(it.xmin, it.ymin, it.xmax, it.ymax) },
+                    classResults.map { it.confidence }
+                ).map { classResults[it] }
+            }
     }
 
     private fun applyNMS(boxes: List<RectF>, scores: List<Float>, iouThreshold: Float = 0.5f): List<Int> {
@@ -247,7 +396,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadModelFile(): MappedByteBuffer {
-        val fileDescriptor = assets.openFd("best_float16.tflite")
+        val fileDescriptor = assets.openFd("multiclass_256_float16.tflite")
         val inputStream = FileInputStream(fileDescriptor.fileDescriptor)
         val fileChannel = inputStream.channel
         val startOffset = fileDescriptor.startOffset
