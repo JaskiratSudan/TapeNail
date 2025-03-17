@@ -38,6 +38,7 @@ android {
 dependencies {
     implementation("org.tensorflow:tensorflow-lite-api:2.16.1")
     implementation("org.tensorflow:tensorflow-lite:2.16.1") // Optional but recommended
+    implementation("com.airbnb.android:lottie:6.1.0")
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
