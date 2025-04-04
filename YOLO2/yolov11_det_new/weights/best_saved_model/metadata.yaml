@@ -1,0 +1,22 @@
+description: Ultralytics YOLO11n model trained on /content/drive/MyDrive/Prof. Xiao
+  Zhang TAI Lab/Tape Nail/YOLO2/data.yaml
+author: Ultralytics
+date: '2025-03-22T16:31:15.672172'
+version: 8.3.78
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 256
+- 256
+names:
+  0: Pattern 0
+  1: Pattern 1
+  2: Pattern 2
+args:
+  batch: 1
+  half: false
+  int8: false
+  nms: false

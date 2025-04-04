@@ -7,12 +7,11 @@ cap.set(3, 640)
 cap.set(4, 480)
 
 # model
-model = YOLO("multi_class_yolov11.pt")
+model = YOLO("multiclass_det_03-26-25.pt")
 
 # object classes
 classNames = ["Pattern 1", "Pattern 2", "Pattern 3", "Pattern 4", "Pattern 5", "Pattern 6", "Pattern 7"]
-
-
+# classNames = ["Pattern 0", "Pattern 1", "Pattern 2"]
 
 while True:
     success, img = cap.read()
