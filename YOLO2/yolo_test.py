@@ -2,7 +2,7 @@ import os
 from ultralytics import YOLO
 
 # Load the pretrained YOLO model
-model = YOLO("multi_class_yolov11.pt")
+model = YOLO("content/YOLO_Segmentation/yolo_segmentation/weights/best.pt")
 
 # Specify the paths for the 'test' folder and 'output' folder
 test_folder = "dataset/test/images"

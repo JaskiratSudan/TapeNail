@@ -1,12 +1,6 @@
-train: train/images
-val: valid/images
-test: test/images
+train: /Users/jaskirat-sudan/Code/YOLO/dataset/train/images
+val: /Users/jaskirat-sudan/Code/YOLO/dataset/valid/images
+test: /Users/jaskirat-sudan/Code/YOLO/dataset/test/images
 
 names: 
-  0: Pattern 1
-  1: Pattern 2
-  2: Pattern 3
-  3: Pattern 4
-  4: Pattern 5
-  5: Pattern 6
-  6: Pattern 7
+  0: Pattern

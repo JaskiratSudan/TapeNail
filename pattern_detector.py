@@ -1,21 +1,50 @@
 import cv2
 import numpy as np
-import time
-import tkinter as tk
-from tkinter import filedialog, ttk
-from PIL import Image, ImageTk
 import os
 from concurrent.futures import ThreadPoolExecutor
-import threading
+import time
 
-# ============= CONFIGURATION PARAMETERS =============
-# Detection Confidence Parameters
+# Configuration Parameters
 CONFIDENCE_PARAMS = {
-    'min_confidence': 0.10,     # Lowered minimum confidence for testing
-    'min_match_percentage': 10, # Lowered minimum match percentage for testing
+    'min_confidence': 0.1,     # Minimum confidence score for detection
+    'min_match_percentage': 3, # Minimum percentage of matched features
     'max_distance': 100,        # Maximum allowed distance between matched points
-    'ransac_threshold': 5.0,    # Increased RANSAC threshold for more tolerance
-    'ransac_confidence': 0.70   # Slightly reduced RANSAC confidence
+    'ransac_threshold': 5.0,    # RANSAC threshold for homography estimation
+    'ransac_confidence': 0.70   # RANSAC confidence level
+}
+
+SIFT_PARAMS = {
+    'nfeatures': 0,            # 0 means no limit on features
+    'nOctaveLayers': 3,        # Number of layers in each octave
+    'contrastThreshold': 0.04,  # Lower value = more features
+    'edgeThreshold': 10,       # Lower value = more edge features
+    'sigma': 1.6               # Gaussian sigma
+}
+
+TEMPLATE_PARAMS = {
+    'max_dimension': 200,      # Maximum dimension for template resizing
+    'min_matches': 6,          # Minimum number of good matches required
+    'match_ratio': 0.75,       # Ratio for Lowe's ratio test
+    'downscale_factor': 0.5    # Downscale factor for faster processing
+}
+
+FRAME_PARAMS = {
+    'width': 640,              # Frame width
+    'height': 480,             # Frame height
+    'fps': 30,                 # Target FPS
+    'skip_frames': 3,          # Process every nth frame
+    'downscale_factor': 0.5    # Downscale factor for processing
+}
+
+MATCHING_PARAMS = {
+    'trees': 4,                # Number of trees in FLANN matcher
+    'checks': 32,              # Number of checks in FLANN matcher
+    'k': 2                     # Number of nearest neighbors
+}
+
+THREADING_PARAMS = {
+    'max_workers': 4,          # Maximum number of parallel threads
+    'chunk_size': 2            # Number of templates to process per thread
 }
 
 # Pattern Colors (BGR format)
@@ -32,56 +61,10 @@ PATTERN_COLORS = [
     (128, 128, 0)   # Dark Cyan
 ]
 
-# SIFT Feature Detection Parameters
-SIFT_PARAMS = {
-    'nfeatures': 500,           # Reduced number of features for faster processing
-    'nOctaveLayers': 2,        # Reduced layers for faster processing
-    'contrastThreshold': 0.05,  # Slightly increased to reduce features
-    'edgeThreshold': 12,       # Increased to reduce edge features
-    'sigma': 1.6               # Gaussian sigma
-}
-
-# Template Processing Parameters
-TEMPLATE_PARAMS = {
-    'max_dimension': 200,      # Reduced maximum dimension for faster processing
-    'min_matches': 8,          # Reduced minimum matches
-    'match_ratio': 0.80,       # Ratio for Lowe's ratio test
-    'downscale_factor': 0.5    # Downscale factor for faster processing
-}
-
-# Frame Processing Parameters
-FRAME_PARAMS = {
-    'width': 640,              # Frame width
-    'height': 480,             # Frame height
-    'fps': 30,                 # Target FPS
-    'skip_frames': 3,          # Increased frame skip for better performance
-    'buffer_size': 2,          # Reduced buffer size
-    'roi_margin': 50,          # Margin for ROI processing
-    'downscale_factor': 0.5    # Downscale factor for processing
-}
-
-# Feature Matching Parameters
-MATCHING_PARAMS = {
-    'trees': 4,                # Reduced number of trees
-    'checks': 32,              # Reduced number of checks
-    'k': 2                     # Number of nearest neighbors
-}
-
-# Threading Parameters
-THREADING_PARAMS = {
-    'max_workers': 4,          # Maximum number of parallel threads
-    'chunk_size': 2            # Number of templates to process per thread
-}
-
-# ============= END CONFIGURATION =============
-
-# Initialize SIFT with configured parameters
-sift = cv2.SIFT_create(**SIFT_PARAMS)
-
 class Template:
-    def __init__(self, path, name):
+    def __init__(self, path, pattern_num):
         self.path = path
-        self.name = name
+        self.pattern_num = pattern_num
         self.image = cv2.imread(path)
         if self.image is not None:
             # Resize template to a reasonable size for faster processing
@@ -105,126 +88,39 @@ class Template:
             self.kp = None
             self.des = None
 
-class PatternClass:
-    def __init__(self, name):
-        self.name = name
-        self.templates = []
-        self.template_frames = []
-        self.frame = None
-        self.color = PATTERN_COLORS[len(self.templates) % len(PATTERN_COLORS)]
-
-class TemplateSelector:
-    def __init__(self, master):
-        self.master = master
-        self.master.title("Pattern Detector")
-        self.master.geometry("800x600")
-
-        self.patterns = {}  # Dictionary to store pattern classes
-        self.main_frame = ttk.Frame(self.master)
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        # Create template selection frame
-        self.template_frame = ttk.LabelFrame(self.main_frame, text="Pattern Templates")
-        self.template_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        # Create scrollable frame for patterns
-        self.canvas = tk.Canvas(self.template_frame)
-        self.scrollbar = ttk.Scrollbar(self.template_frame, orient="vertical", command=self.canvas.yview)
-        self.scrollable_frame = ttk.Frame(self.canvas)
-
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        )
-
-        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
-
-        # Pack scrollbar and canvas
-        self.scrollbar.pack(side="right", fill="y")
-        self.canvas.pack(side="left", fill="both", expand=True)
-
-        # Add pattern button
-        self.add_pattern_button = ttk.Button(self.main_frame, text="Add New Pattern", command=self.add_pattern)
-        self.add_pattern_button.pack(pady=10)
-
-        # Start button
-        self.start_button = ttk.Button(self.main_frame, text="Start Detection", command=self.start_detection)
-        self.start_button.pack(pady=10)
-
-    def add_pattern(self):
-        # Create a new pattern class
-        pattern_name = f"Pattern {len(self.patterns) + 1}"
-        pattern = PatternClass(pattern_name)
-        self.patterns[pattern_name] = pattern
-
-        # Create frame for pattern
-        pattern.frame = ttk.LabelFrame(self.scrollable_frame, text=pattern_name)
-        pattern.frame.pack(fill=tk.X, padx=5, pady=5)
-
-        # Add template button for this pattern
-        add_template_btn = ttk.Button(pattern.frame, text="Add Template", 
-                                    command=lambda p=pattern: self.add_template(p))
-        add_template_btn.pack(pady=5)
-
-        # Add remove pattern button
-        remove_pattern_btn = ttk.Button(pattern.frame, text="Remove Pattern", 
-                                      command=lambda p=pattern: self.remove_pattern(p))
-        remove_pattern_btn.pack(pady=5)
-
-        # Enable start button if we have at least one pattern
-        self.start_button.config(state=tk.NORMAL)
-
-    def add_template(self, pattern):
-        template_paths = filedialog.askopenfilenames(
-            initialdir="images",
-            filetypes=[("Image files", "*.png *.jpg *.jpeg")]
-        )
-        
-        if template_paths:
-            # Create frame for template count
-            template_frame = ttk.Frame(pattern.frame)
-            template_frame.pack(fill=tk.X, padx=5, pady=2)
-            
-            # Add template count label
-            count_label = ttk.Label(template_frame, text=f"Templates: {len(pattern.templates)}")
-            count_label.pack(side=tk.LEFT, padx=5)
-            
-            # Add remove button
-            remove_btn = ttk.Button(template_frame, text="Remove All", 
-                                  command=lambda f=template_frame: self.remove_all_templates(pattern, f))
-            remove_btn.pack(side=tk.RIGHT, padx=5)
-            
-            # Add templates
-            for template_path in template_paths:
-                template = Template(template_path, pattern.name)
-                if template.kp is not None:
-                    pattern.templates.append(template)
-                    count_label.config(text=f"Templates: {len(pattern.templates)}")
-            
-            pattern.template_frames.append(template_frame)
-
-    def remove_all_templates(self, pattern, frame):
-        pattern.templates.clear()
-        frame.destroy()
-        pattern.template_frames.remove(frame)
-
-    def remove_pattern(self, pattern):
-        pattern.frame.destroy()
-        del self.patterns[pattern.name]
-        
-        # Disable start button if no patterns left
-        if not self.patterns:
-            self.start_button.config(state=tk.DISABLED)
-
-    def start_detection(self):
-        if self.patterns:
-            self.master.destroy()
-            # Flatten templates list for detection
-            all_templates = []
-            for pattern in self.patterns.values():
-                all_templates.extend(pattern.templates)
-            run_detection(all_templates)
+def load_templates(image_dir):
+    """Load all templates from the images directory."""
+    templates = []
+    pattern_templates = {}  # Dictionary to store templates by pattern number
+    
+    # Initialize SIFT
+    global sift
+    sift = cv2.SIFT_create(**SIFT_PARAMS)
+    
+    # Get all image files
+    image_files = [f for f in os.listdir(image_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
+    
+    # Group files by pattern number
+    for filename in image_files:
+        if filename.startswith('pat_'):
+            try:
+                pattern_num = int(filename.split('_')[1])
+                if pattern_num not in pattern_templates:
+                    pattern_templates[pattern_num] = []
+                pattern_templates[pattern_num].append(filename)
+            except (IndexError, ValueError):
+                print(f"Warning: Could not parse pattern number from {filename}")
+    
+    # Load templates for each pattern
+    for pattern_num, files in pattern_templates.items():
+        print(f"Loading {len(files)} templates for pattern {pattern_num}")
+        for filename in files:
+            template_path = os.path.join(image_dir, filename)
+            template = Template(template_path, pattern_num)
+            if template.kp is not None:
+                templates.append(template)
+    
+    return templates
 
 def process_template_chunk(args):
     templates, frame, kp_frame, des_frame, flann = args
@@ -251,7 +147,7 @@ def process_template_chunk(args):
             src_pts *= (1.0 / TEMPLATE_PARAMS['downscale_factor'])
             dst_pts *= (1.0 / FRAME_PARAMS['downscale_factor'])
             
-            # Use findHomography instead of estimateAffinePartial2D for better results
+            # Use findHomography for better results
             M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 
                                        CONFIDENCE_PARAMS['ransac_threshold'],
                                        maxIters=2000,
@@ -279,6 +175,9 @@ def process_template_chunk(args):
                     y = int(min(y_coords))
                     width = int(max(x_coords) - x)
                     height = int(max(y_coords) - y)
+                    
+                    # Add debug print
+                    print(f"Pattern {template.pattern_num} detected: {match_percentage:.1f}% matches, confidence: {confidence:.2f}")
                     
                     results.append((template, match_percentage, (x, y, width, height), confidence))
     
@@ -341,43 +240,42 @@ def run_detection(templates):
             # Flatten results
             results = [item for chunk in chunk_results for item in chunk]
             
-            # Group results by pattern name
+            # Group results by pattern number
             pattern_results = {}
             for template, match_percentage, rect, confidence in results:
                 if rect is not None:
-                    if template.name not in pattern_results:
-                        pattern_results[template.name] = []
-                    pattern_results[template.name].append((match_percentage, rect, confidence))
+                    if template.pattern_num not in pattern_results:
+                        pattern_results[template.pattern_num] = []
+                    pattern_results[template.pattern_num].append((match_percentage, rect, confidence))
             
             # Draw results (use best match for each pattern)
             y_offset = 30
-            for pattern_name, matches in pattern_results.items():
+            for pattern_num, matches in pattern_results.items():
                 # Sort by confidence and use the best match
                 best_match = max(matches, key=lambda x: x[2])
                 match_percentage, rect, confidence = best_match
                 
                 # Store last successful detection
-                last_detections[pattern_name] = (rect, confidence)
+                last_detections[pattern_num] = (rect, confidence)
                 
-                # Get pattern color and adjust brightness based on confidence
-                pattern_color = PATTERN_COLORS[list(pattern_results.keys()).index(pattern_name) % len(PATTERN_COLORS)]
-                color = tuple(int(c * confidence) for c in pattern_color)
+                # Get pattern color
+                color = PATTERN_COLORS[pattern_num % len(PATTERN_COLORS)]
                 
                 # Draw rectangle
                 x, y, w, h = rect
                 cv2.rectangle(frame, (x, y), (x + w, y + h), color, 3)
                 
-                # Draw text with pattern color
-                cv2.putText(frame, f"{pattern_name}: {match_percentage:.1f}% ({confidence:.2f})", 
+                # Draw text
+                cv2.putText(frame, f"Pattern {pattern_num}: {match_percentage:.1f}% ({confidence:.2f})", 
                           (10, y_offset), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 1, pattern_color, 2)
+                          cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
                 y_offset += 30
             
             # Draw last known detections for patterns not detected in current frame
-            for pattern_name, (rect, confidence) in last_detections.items():
-                if pattern_name not in pattern_results:
-                    pattern_color = PATTERN_COLORS[list(last_detections.keys()).index(pattern_name) % len(PATTERN_COLORS)]
-                    color = tuple(int(c * confidence * 0.5) for c in pattern_color)  # Dimmed color for old detections
+            for pattern_num, (rect, confidence) in last_detections.items():
+                if pattern_num not in pattern_results:
+                    color = PATTERN_COLORS[pattern_num % len(PATTERN_COLORS)]
+                    color = tuple(int(c * confidence * 0.5) for c in color)  # Dimmed color for old detections
                     x, y, w, h = rect
                     cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
             
@@ -402,6 +300,9 @@ def run_detection(templates):
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = TemplateSelector(root)
-    root.mainloop()
+    # Load templates from the images directory
+    templates = load_templates("cropped_multiclass_dataset")
+    print(f"Loaded {len(templates)} templates")
+    
+    # Run detection
+    run_detection(templates) 
