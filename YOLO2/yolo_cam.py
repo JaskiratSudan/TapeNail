@@ -14,6 +14,7 @@ model = YOLO("multiclass_det_03-26-25.pt")
 # object classes
 classNames = ["Pattern 1", "Pattern 2", "Pattern 3", "Pattern 4", "Pattern 5", "Pattern 6", "Pattern 7"]
 # classNames = ["Pattern 0", "Pattern 1", "Pattern 2"]
+<<<<<<< HEAD
 =======
 # Load model
 model = YOLO("content/YOLOV11_det/yolov11_det/weights/best.pt")
@@ -24,6 +25,8 @@ classNames = ["Pattern"]
 # Confidence threshold
 CONFIDENCE_THRESHOLD = 0.5  # Set the minimum confidence score
 >>>>>>> parent of 36d8075 (multiclass working and authentication working.)
+=======
+>>>>>>> 4c6a3fceb7123e77680acc2897a8db8ad1f770d6
 
 while True:
     success, img = cap.read()
