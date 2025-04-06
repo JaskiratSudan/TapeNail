@@ -1,3 +1,9 @@
 *.pt
 *.tflite
 *.onnx
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
