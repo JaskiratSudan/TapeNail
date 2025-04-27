@@ -269,7 +269,6 @@ def process_template_chunk(args):
                 confidence = (match_percentage / 100.0) * (np.sum(mask) / len(mask))
                 
                 if confidence >= CONFIDENCE_PARAMS['min_confidence']:
-<<<<<<< HEAD
                     # Convert corners to rectangle format (x, y, width, height)
                     corners = dst.reshape(-1, 2)
                     x_coords = corners[:, 0]
@@ -298,25 +297,6 @@ def run_detection(templates):
     search_params = dict(checks=MATCHING_PARAMS['checks'])
     flann = cv2.FlannBasedMatcher(index_params, search_params)
 
-=======
-                    results.append((template, match_percentage, np.int32(dst), confidence))
-    
-    return results
-
-def run_detection(templates):
-    cap = cv2.VideoCapture(0)
-    
-    # Set camera properties for better performance
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_PARAMS['width'])
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_PARAMS['height'])
-    cap.set(cv2.CAP_PROP_FPS, FRAME_PARAMS['fps'])
-    
-    FLANN_INDEX_KDTREE = 1
-    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=MATCHING_PARAMS['trees'])
-    search_params = dict(checks=MATCHING_PARAMS['checks'])
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-
->>>>>>> 4c6a3fceb7123e77680acc2897a8db8ad1f770d6
     # Initialize thread pool for parallel processing
     executor = ThreadPoolExecutor(max_workers=THREADING_PARAMS['max_workers'])
     
@@ -363,49 +343,29 @@ def run_detection(templates):
             
             # Group results by pattern name
             pattern_results = {}
-<<<<<<< HEAD
-            for template, match_percentage, rect, confidence in results:
-                if rect is not None:
-                    if template.name not in pattern_results:
-                        pattern_results[template.name] = []
-                    pattern_results[template.name].append((match_percentage, rect, confidence))
-=======
             for template, match_percentage, dst, confidence in results:
                 if dst is not None:
                     if template.name not in pattern_results:
                         pattern_results[template.name] = []
                     pattern_results[template.name].append((match_percentage, dst, confidence))
->>>>>>> 4c6a3fceb7123e77680acc2897a8db8ad1f770d6
             
             # Draw results (use best match for each pattern)
             y_offset = 30
             for pattern_name, matches in pattern_results.items():
                 # Sort by confidence and use the best match
                 best_match = max(matches, key=lambda x: x[2])
-<<<<<<< HEAD
                 match_percentage, rect, confidence = best_match
                 
                 # Store last successful detection
                 last_detections[pattern_name] = (rect, confidence)
-=======
-                match_percentage, dst, confidence = best_match
-                
-                # Store last successful detection
-                last_detections[pattern_name] = (dst, confidence)
->>>>>>> 4c6a3fceb7123e77680acc2897a8db8ad1f770d6
                 
                 # Get pattern color and adjust brightness based on confidence
                 pattern_color = PATTERN_COLORS[list(pattern_results.keys()).index(pattern_name) % len(PATTERN_COLORS)]
                 color = tuple(int(c * confidence) for c in pattern_color)
                 
-<<<<<<< HEAD
                 # Draw rectangle
                 x, y, w, h = rect
                 cv2.rectangle(frame, (x, y), (x + w, y + h), color, 3)
-=======
-                # Draw detection box
-                frame = cv2.polylines(frame, [dst], True, color, 3, cv2.LINE_AA)
->>>>>>> 4c6a3fceb7123e77680acc2897a8db8ad1f770d6
                 
                 # Draw text with pattern color
                 cv2.putText(frame, f"{pattern_name}: {match_percentage:.1f}% ({confidence:.2f})", 
@@ -414,20 +374,12 @@ def run_detection(templates):
                 y_offset += 30
             
             # Draw last known detections for patterns not detected in current frame
-<<<<<<< HEAD
             for pattern_name, (rect, confidence) in last_detections.items():
                 if pattern_name not in pattern_results:
                     pattern_color = PATTERN_COLORS[list(last_detections.keys()).index(pattern_name) % len(PATTERN_COLORS)]
                     color = tuple(int(c * confidence * 0.5) for c in pattern_color)  # Dimmed color for old detections
                     x, y, w, h = rect
                     cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-=======
-            for pattern_name, (dst, confidence) in last_detections.items():
-                if pattern_name not in pattern_results:
-                    pattern_color = PATTERN_COLORS[list(last_detections.keys()).index(pattern_name) % len(PATTERN_COLORS)]
-                    color = tuple(int(c * confidence * 0.5) for c in pattern_color)  # Dimmed color for old detections
-                    frame = cv2.polylines(frame, [dst], True, color, 2, cv2.LINE_AA)
->>>>>>> 4c6a3fceb7123e77680acc2897a8db8ad1f770d6
             
             end_time = time.time()
             fps = 1 / (end_time - start_time)
