@@ -101,6 +101,11 @@ def main():
     for s in SHAPES:
         os.makedirs(os.path.join(BASE_DIR, s), exist_ok=True)
 
+    # start pattern counter
+    current_pat = get_next_pattern_number()
+    print(f"→ Starting with pattern #{current_pat:02d}")
+    print("   (Press 'c' to capture, 'n' for next pattern, 'q' to quit.)")
+
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Error: Cannot open webcam")
@@ -111,7 +116,6 @@ def main():
     cv2.createTrackbar("Canny Th1", "Controls", 65, 255, on_change)
     cv2.createTrackbar("Canny Th2", "Controls", 150, 255, on_change)
 
-    print("→ Press 'c' to capture templates, 'q' to quit.")
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -141,17 +145,22 @@ def main():
                 M = cv2.moments(c)
                 cx = int(M["m10"]/M["m00"]) if M["m00"]!=0 else 0
                 cy = int(M["m01"]/M["m00"]) if M["m00"]!=0 else 0
-                cv2.drawContours(disp, [c], -1, DISPLAY_PARAMS['contour_color'], DISPLAY_PARAMS['contour_thickness'])
+                cv2.drawContours(disp, [c], -1,
+                                 DISPLAY_PARAMS['contour_color'],
+                                 DISPLAY_PARAMS['contour_thickness'])
                 cv2.putText(disp, shape, (cx-20, cy-20),
-                            cv2.FONT_HERSHEY_SIMPLEX, DISPLAY_PARAMS['text_scale'],
-                            DISPLAY_PARAMS['text_color'], DISPLAY_PARAMS['text_thickness'])
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            DISPLAY_PARAMS['text_scale'],
+                            DISPLAY_PARAMS['text_color'],
+                            DISPLAY_PARAMS['text_thickness'])
 
-        cv2.putText(disp, f"Blur={k}  Th1={th1}  Th2={th2}",
+        cv2.putText(disp,
+                    f"Pattern #{current_pat:02d}  |  Blur={k} Th1={th1} Th2={th2}",
                     (10,30), cv2.FONT_HERSHEY_SIMPLEX,
                     DISPLAY_PARAMS['status_scale'],
                     DISPLAY_PARAMS['status_color'],
                     DISPLAY_PARAMS['text_thickness'])
-        cv2.putText(disp, "Press 'c' to capture, 'q' to quit",
+        cv2.putText(disp, "Press 'c' to capture, 'n' next, 'q' quit",
                     (10,60), cv2.FONT_HERSHEY_SIMPLEX,
                     DISPLAY_PARAMS['status_scale'],
                     DISPLAY_PARAMS['status_color'],
@@ -162,11 +171,11 @@ def main():
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('c'):
-            pat = get_next_pattern_number()
-            print(f"\nCapturing pattern set {pat:02d}")
+            # capture using current_pat
+            print(f"\nCapturing pattern #{current_pat:02d}")
             pat_dirs = {}
             for s in SHAPES:
-                sub = os.path.join(BASE_DIR, s, f"pat_{pat:02d}")
+                sub = os.path.join(BASE_DIR, s, f"pat_{current_pat:02d}")
                 os.makedirs(sub, exist_ok=True)
                 pat_dirs[s] = sub
 
@@ -178,35 +187,38 @@ def main():
                 if shape in SHAPES:
                     roi_rgba = extract_shape_region(orig, c)
                     roi_bgr  = cv2.cvtColor(roi_rgba, cv2.COLOR_BGRA2BGR)
-
-                    # preprocessing pipeline
                     roi_dn   = denoise_hsv(roi_bgr)
                     roi_cl   = apply_clahe(roi_dn)
                     roi_proc = cv2.resize(roi_cl, FIXED_SIZE)
 
                     # save full ROI
-                    idx    = counters[shape]
-                    letter = shape[0]
-                    base_fn = f"{idx:02d}_{letter}"
-                    full_path = os.path.join(pat_dirs[shape], base_fn + ".png")
-                    cv2.imwrite(full_path, roi_proc)
-                    print(f"  • Saved full ROI {full_path}")
+                    idx      = counters[shape]
+                    letter   = shape[0]
+                    base_fn  = f"{idx:02d}_{letter}"
+                    full_fn  = os.path.join(pat_dirs[shape], base_fn + ".png")
+                    cv2.imwrite(full_fn, roi_proc)
+                    print(f"  • Saved full ROI: {full_fn}")
 
-                    # random cropping augmentation
+                    # random crops
                     h_proc, w_proc = FIXED_SIZE[1], FIXED_SIZE[0]
-                    crop_h, crop_w = CROP_SIZE[1], CROP_SIZE[0]
+                    ch, cw         = CROP_SIZE[1], CROP_SIZE[0]
                     for j in range(NUM_RANDOM_CROPS):
-                        if w_proc <= crop_w or h_proc <= crop_h:
+                        if w_proc <= cw or h_proc <= ch:
                             break
-                        x_off = random.randint(0, w_proc - crop_w)
-                        y_off = random.randint(0, h_proc - crop_h)
-                        crop = roi_proc[y_off:y_off+crop_h, x_off:x_off+crop_w]
-                        crop_path = os.path.join(pat_dirs[shape], f"{base_fn}_crop{j}.png")
-                        cv2.imwrite(crop_path, crop)
-                        print(f"    • Saved crop {crop_path}")
+                        x_off = random.randint(0, w_proc - cw)
+                        y_off = random.randint(0, h_proc - ch)
+                        crop = roi_proc[y_off:y_off+ch, x_off:x_off+cw]
+                        crop_fn = os.path.join(pat_dirs[shape], f"{base_fn}_crop{j}.png")
+                        cv2.imwrite(crop_fn, crop)
+                        print(f"    • Saved crop: {crop_fn}")
 
                     counters[shape] += 1
             print("Done.")
+
+        elif key == ord('n'):
+            # move to next pattern number
+            current_pat += 1
+            print(f"\n→ Switched to pattern #{current_pat:02d}")
 
         elif key == ord('q'):
             break
