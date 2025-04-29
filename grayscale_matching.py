@@ -10,13 +10,13 @@ import matplotlib.pyplot as plt
 TEMPLATE_DIR        = "patterns/circle"
 FRAME_WIDTH         = 640
 
-MATCH_THRESHOLD     = 12
-RATIO_THRESH        = 0.90
+MATCH_THRESHOLD     = 3
+RATIO_THRESH        = 0.70
 FLANN_TREES         = 5
 FLANN_CHECKS        = 1800
 SIFT_MAX_FEATURES   = 1200
 
-LOCK_TIME_SEC       = 2.0    # need 2s of continuous match
+LOCK_TIME_SEC       = 1.0    # need 2s of continuous match
 
 # Preproc params
 FIXED_SIZE          = (200, 200)
