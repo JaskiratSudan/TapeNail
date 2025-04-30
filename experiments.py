@@ -1,152 +1,303 @@
 #!/usr/bin/env python3
-"""
-ViKey reader  ▪  with frame-level logging for experiments
----------------------------------------------------------
-New features (all marked  # === LOG === ):
-  • Per-frame CSV log of:
-        frame_idx, tp, fp, contour_ms, match_ms, total_ms, fps
-  • Aggregated run summary (TP, FN, FP, accuracy, mean_latency, std_latency)
-  • Auto-named log file: logs/read_<PATTERNID>_<YYYYMMDD-HHMMSS>.csv
-No other behaviour or parameters changed.
-"""
-import cv2, numpy as np, os, time, math, csv, datetime, statistics
-import matplotlib.pyplot as plt
-# --------------[ original imports / config UNCHANGED ]-----------------
-TEMPLATE_DIR="patterns/circle"; FRAME_WIDTH=960; MATCH_THRESHOLD=5
-RATIO_THRESH=0.85; FLANN_TREES=5; FLANN_CHECKS=1200; SIFT_MAX_FEATURES=2200
-HOLD_FRAMES_MAX=5; UNLOCK_DELAY=1.0
-FIXED_SIZE=(200,200); BILATERAL_PARAMS=(5,75,75)
-NLM_PARAMS={"h":10,"templateWindowSize":7,"searchWindowSize":21}
-CLAHE_CLIP=2.0; CLAHE_GRID=(8,8)
-MIN_AREA=500; CIRCULARITY_THRESH=0.7
-cv2.setUseOptimized(True); cv2.setNumThreads(4)
-sift=cv2.SIFT_create(nfeatures=SIFT_MAX_FEATURES)
-flann=cv2.FlannBasedMatcher(dict(algorithm=1,trees=FLANN_TREES),
-                            dict(checks=FLANN_CHECKS))
-# ------------------------[ helper functions UNCHANGED ]----------------
-# ...  preprocess(), is_circle(), show_pattern_grid(), detect_pattern(),
-#      play_unlock_animation()  (identical to your original script) ...
-# ----------------------------------------------------------------------
+import cv2
+import numpy as np
+import os
+import time
+import math
+import csv
+import psutil
 
-# --- Load templates (unchanged) ---
-original_map, templates = {}, []
-#  ...  (same template-loading block) ...
+# === CONFIGURATION ===
+TEMPLATE_DIR      = "patterns/circle"
+FRAME_WIDTH       = 960
+MATCH_THRESHOLD   = 5        # total good matches (across all 3 channels) needed
+RATIO_THRESH      = 0.85     # Lowe’s ratio test
+FLANN_TREES       = 5
+FLANN_CHECKS      = 1500
+SIFT_MAX_FEATURES = 2000
 
-# ------------- MAIN LOOP -------------
-while True:
-    show_pattern_grid(original_map)
-    selected=input("Pattern ID to unlock: ").strip()
-    if selected not in original_map:
-        print("Invalid ID."); continue
+# --- Pre-processing parameters
+FIXED_SIZE        = (200, 200)
+BILATERAL_PARAMS  = (5, 75, 75)
+NLM_PARAMS        = {"h": 10, "templateWindowSize": 7, "searchWindowSize": 21}
+CLAHE_CLIP        = 2.0
+CLAHE_GRID        = (8, 8)
 
-    # === LOG ===  prepare CSV file & counters
-    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    os.makedirs("logs", exist_ok=True)
-    logfile = f"logs/read_{selected}_{ts}.csv"
-    csv_f = open(logfile, "w", newline="")
-    logger = csv.writer(csv_f)
-    logger.writerow(["frame","tp","fp","contour_ms","match_ms",
-                     "total_ms","fps"])
+# --- Contour filtering
+MIN_AREA           = 500     # px²
+CIRCULARITY_THRESH = 0.7     # 4π·A / P²
 
-    frame_idx = 0
-    tp = fp = 0
-    latency_samples = []
+# === OpenCV & SIFT/FLANN setup ===
+cv2.setUseOptimized(True)
+cv2.setNumThreads(4)
+sift  = cv2.SIFT_create(nfeatures=SIFT_MAX_FEATURES)
+flann = cv2.FlannBasedMatcher(
+    dict(algorithm=1, trees=FLANN_TREES),
+    dict(checks=FLANN_CHECKS)
+)
 
-    cap=cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("Cannot open webcam"); break
+# --------------------------------------------------------------------------
+# Helper functions
+# --------------------------------------------------------------------------
+def preprocess(img):
+    """Denoise, CLAHE enhance, resize & return processed color + gray."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    s = cv2.bilateralFilter(s, *BILATERAL_PARAMS)
+    v = cv2.fastNlMeansDenoising(v, None, **NLM_PARAMS)
+    den = cv2.cvtColor(cv2.merge([h, s, v]), cv2.COLOR_HSV2BGR)
 
-    prev=time.time(); hold=0; detection_start=None
+    lab = cv2.cvtColor(den, cv2.COLOR_BGR2Lab)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP, tileGridSize=CLAHE_GRID)
+    l = clahe.apply(l)
+    enhanced = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_Lab2BGR)
 
-    print("Press 'r' to restart, 'q' to quit.")
+    proc = cv2.resize(enhanced, FIXED_SIZE)
+    gray = cv2.cvtColor(proc, cv2.COLOR_BGR2GRAY)
+    return proc, gray
+
+def is_circle(cnt):
+    """Filter non-circular contours by area & circularity."""
+    area = cv2.contourArea(cnt)
+    if area < MIN_AREA:
+        return False
+    peri = cv2.arcLength(cnt, True)
+    if peri == 0:
+        return False
+    circ = 4 * math.pi * area / (peri * peri)
+    return circ >= CIRCULARITY_THRESH
+
+def select_pattern_cv(original_map, thumb_size=(150,150), cols=4):
+    """
+    Display patterns in an OpenCV grid. Click to pick one.
+    Returns selected pattern_id or None if ESC.
+    """
+    items = list(original_map.items())
+    n = len(items)
+    rows = (n + cols - 1) // cols
+    w, h = thumb_size
+
+    canvas = np.zeros((rows*h, cols*w, 3), dtype=np.uint8)
+    for idx, (pid, img) in enumerate(items):
+        r, c = divmod(idx, cols)
+        thumb = cv2.resize(img, thumb_size)
+        y, x = r*h, c*w
+        canvas[y:y+h, x:x+w] = thumb
+        cv2.rectangle(canvas, (x,y), (x+w-1,y+h-1), (255,255,255), 2)
+        cv2.putText(canvas, pid, (x+5, y+20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+
+    selected = {'pid': None}
+    win = "Select Pattern"
+    cv2.namedWindow(win)
+    cv2.imshow(win, canvas)
+
+    def on_mouse(event, mx, my, flags, param):
+        if event == cv2.EVENT_LBUTTONUP:
+            col = mx // w
+            row = my // h
+            idx = row*cols + col
+            if 0 <= idx < n:
+                selected['pid'] = items[idx][0]
+                cv2.destroyWindow(win)
+
+    cv2.setMouseCallback(win, on_mouse)
+
     while True:
-        loop_start=time.time()
-        ret, frame=cap.read()
-        if not ret: break
-        frame_idx+=1
+        key = cv2.waitKey(10) & 0xFF
+        if selected['pid'] is not None:
+            return selected['pid']
+        if key == 27:  # ESC
+            cv2.destroyWindow(win)
+            return None
 
-        # --- (original preprocessing + contour + matching) -------------
-        h0,w0=frame.shape[:2]; new_h=int(h0*FRAME_WIDTH/w0)
-        frm=cv2.resize(frame,(FRAME_WIDTH,new_h)); disp=frm.copy()
+def detect_pattern(desc2_list):
+    """
+    desc2_list: [B_desc, G_desc, R_desc]
+    Returns (pattern_id, total_good_matches) or (None,0).
+    """
+    counts = {}
+    for tmpl in templates:
+        total_good = 0
+        for desc_t, desc2 in zip(tmpl['desc_ch'], desc2_list):
+            if desc_t is None or desc2 is None or len(desc_t) < 2 or len(desc2) < 2:
+                continue
+            matches = flann.knnMatch(desc_t, desc2, k=2)
+            good = [m for m,n in matches if m.distance < RATIO_THRESH * n.distance]
+            total_good += len(good)
+        pid = tmpl['pattern_id']
+        counts[pid] = max(counts.get(pid, 0), total_good)
 
-        t0=time.time()
-        gray=cv2.cvtColor(frm,cv2.COLOR_BGR2GRAY)
-        blur=cv2.GaussianBlur(gray,(7,7),0)
-        edges=cv2.Canny(blur,50,150)
-        cnts,_=cv2.findContours(edges,cv2.RETR_EXTERNAL,
-                                cv2.CHAIN_APPROX_SIMPLE)
-        t_contours=(time.time()-t0)*1000
+    if not counts:
+        return None, 0
 
-        detections=[]; t_match_total=0
+    best_pid = max(counts, key=counts.get)
+    best_cnt = counts[best_pid]
+    return (best_pid, best_cnt) if best_cnt >= MATCH_THRESHOLD else (None, 0)
+
+# --------------------------------------------------------------------------
+# Load templates
+# --------------------------------------------------------------------------
+original_map = {}
+templates    = []
+for d in sorted(os.listdir(TEMPLATE_DIR)):
+    sub = os.path.join(TEMPLATE_DIR, d)
+    if not os.path.isdir(sub) or not d.startswith('pat_'):
+        continue
+    pid = d.split('_',1)[1]
+
+    for fn in sorted(os.listdir(sub)):
+        if fn.endswith('.png') and '_crop' not in fn:
+            img = cv2.imread(os.path.join(sub, fn))
+            if img is not None:
+                original_map[pid] = preprocess(img)[0]
+                break
+
+    for fn in sorted(os.listdir(sub)):
+        img = cv2.imread(os.path.join(sub, fn))
+        if img is None:
+            continue
+        proc, _ = preprocess(img)
+        chans = cv2.split(proc)
+        desc_ch = []
+        for ch in chans:
+            kp, desc = sift.detectAndCompute(ch, None)
+            desc_ch.append(desc if desc is not None else np.zeros((0,128),dtype=np.float32))
+        templates.append({'pattern_id': pid, 'desc_ch': desc_ch})
+
+if not templates:
+    print("No valid templates found! Check TEMPLATE_DIR.")
+    exit(1)
+
+# Prepare CSV logging
+csv_file = "data/detection_log.csv"
+new_file = not os.path.exists(csv_file)
+if new_file:
+    os.makedirs(os.path.dirname(csv_file), exist_ok=True)
+    with open(csv_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Pattern","Picture","Total Frames","Correct Frames",
+                         "Accuracy (%)","Avg Latency (ms)","Avg CPU (%)","Avg Memory (MB)"])
+
+process = psutil.Process(os.getpid())
+process.cpu_percent(None)
+
+cv2.namedWindow('Match')
+cv2.namedWindow('Template')
+
+# --------------------------------------------------------------------------
+# Main loop (always record, auto-reset at 500 frames)
+# --------------------------------------------------------------------------
+while True:
+    selected = select_pattern_cv(original_map)
+    if selected is None:
+        break
+
+    total_frames   = 0
+    correct_frames = 0
+    sum_latency    = 0.0
+    sum_cpu        = 0.0
+    sum_mem        = 0.0
+
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        break
+
+    prev_time = time.time()
+    print("Press 'r' to re-select pattern, 'q' to quit, or automatic reset at 500 detections.")
+
+    quit_program = False
+    auto_reset   = False
+    while True:
+        loop_start = time.time()
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # resize & copy
+        h0, w0 = frame.shape[:2]
+        frm    = cv2.resize(frame, (FRAME_WIDTH, int(h0*FRAME_WIDTH/w0)))
+        disp   = frm.copy()
+
+        # contour detection
+        gray_f  = cv2.cvtColor(frm, cv2.COLOR_BGR2GRAY)
+        blur    = cv2.GaussianBlur(gray_f, (7,7), 0)
+        edges   = cv2.Canny(blur, 50, 150)
+        cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        detections = []
+        t_match     = 0
         for c in cnts:
-            if not is_circle(c): continue
-            x,y,wc,hc=cv2.boundingRect(c)
-            roi=frm[y:y+hc, x:x+wc]
-            _,gray_roi=preprocess(roi)
-            kp2,desc2=sift.detectAndCompute(gray_roi,None)
-            if desc2 is None: continue
-            t1=time.time()
-            pid=detect_pattern(desc2)
-            t_match_total+=(time.time()-t1)*1000
-            if pid: detections.append((x,y,wc,hc,pid))
+            if not is_circle(c):
+                continue
+            x,y,wc,hc = cv2.boundingRect(c)
+            roi        = frm[y:y+hc, x:x+wc]
+            proc_roi, _= preprocess(roi)
+            chans2     = cv2.split(proc_roi)
 
-        # --- decision logic (unchanged) -------------------------------
-        correct_seen = any(pid==selected for *_,pid in detections)
-        if correct_seen:
-            tp += 1
-            if detection_start is None: detection_start=time.time()
-            hold=HOLD_FRAMES_MAX
-        else:
-            hold=max(hold-1,0)
-            if hold==0: detection_start=None
-            # count false negative only if the tag should be visible?
-        # false positives = detections of other IDs
-        fp += sum(1 for *_,pid in detections if pid!=selected)
+            desc2_list = []
+            for ch in chans2:
+                kp2, desc2 = sift.detectAndCompute(ch, None)
+                desc2_list.append(desc2 if desc2 is not None else np.zeros((0,128),dtype=np.float32))
 
-        # unlock check
-        if detection_start and time.time()-detection_start>=UNLOCK_DELAY:
-            play_unlock_animation(disp,original_map[selected]); break
+            t1       = time.time()
+            pid, cnt = detect_pattern(desc2_list)
+            t_match+= (time.time()-t1)*1000
+            if pid:
+                detections.append((x,y,wc,hc,pid,cnt))
 
-        # draw, overlay, FPS  (unchanged)
-        total_latency=(time.time()-loop_start)*1000
-        now=time.time(); fps=1.0/(now-prev); prev=now
-        latency_samples.append(total_latency)
+        # update metrics only for frames with detections
+        if detections:
+            total_frames += 1
+            if any(d[4]==selected for d in detections):
+                correct_frames += 1
+                sum_latency += (time.time()-loop_start)*1000
+                sum_cpu     += process.cpu_percent(None)
+                sum_mem     += process.memory_info().rss
 
-        # === LOG ===  write this frame
-        logger.writerow([frame_idx, int(correct_seen),
-                         sum(1 for *_,pid in detections if pid!=selected),
-                         f"{t_contours:.2f}", f"{t_match_total:.2f}",
-                         f"{total_latency:.2f}", f"{fps:.2f}"])
+        # check auto reset condition
+        if total_frames >= 500:
+            auto_reset = True
+            break
 
-        #  (unchanged display & key handling)
-        cv2.putText(disp,f"Contour:{t_contours:.1f}ms "
-                         f"Match:{t_match_total:.1f}ms "
-                         f"Total:{total_latency:.1f}ms",
-                    (10,new_h-10),cv2.FONT_HERSHEY_SIMPLEX,0.5,(255,255,0),1)
-        cv2.putText(disp,f"FPS:{fps:.1f}",(10,30),
-                    cv2.FONT_HERSHEY_SIMPLEX,1.0,(0,255,255),2)
-        cv2.imshow("Match",disp)
-        cv2.imshow("Template",original_map[selected] if detections
-                    else np.zeros_like(original_map[selected]))
-        key=cv2.waitKey(1)&0xFF
-        if key==ord('r'): break
-        if key==ord('q'):
-            cap.release(); cv2.destroyAllWindows(); csv_f.close(); exit(0)
+        # draw
+        for x,y,wc,hc,pid,cnt in detections:
+            color = (0,255,0) if pid==selected else (0,0,255)
+            cv2.rectangle(disp, (x,y), (x+wc,y+hc), color, 2)
+            cv2.putText(disp, f"{pid}:{cnt}", (x,y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-    # === LOG ===  run summary
-    cap.release(); cv2.destroyAllWindows()
-    fn = frame_idx - tp             # counted as FN when tag missed
-    acc = 100*tp/max(tp+fn,1)
-    mean_lat = statistics.mean(latency_samples) if latency_samples else 0
-    sd_lat   = statistics.stdev(latency_samples) if len(latency_samples)>1 else 0
-    logger.writerow([])             # blank line
-    logger.writerow(["#Summary"])
-    logger.writerow(["frames", frame_idx])
-    logger.writerow(["TP", tp])
-    logger.writerow(["FN", fn])
-    logger.writerow(["FP", fp])
-    logger.writerow(["accuracy_%", f"{acc:.2f}"])
-    logger.writerow(["mean_latency_ms", f"{mean_lat:.2f}"])
-    logger.writerow(["std_latency_ms", f"{sd_lat:.2f}"])
-    csv_f.close()
-    print(f"Log saved → {logfile}")
+        # overlays
+        total_latency = (time.time()-loop_start)*1000
+        fps          = 1.0/(time.time()-prev_time)
+        prev_time    = time.time()
+        cv2.putText(disp, f"Match:{t_match:.1f}ms Total:{total_latency:.1f}ms", (10,frm.shape[0]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0),1)
+        cv2.putText(disp, f"FPS:{fps:.1f}", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,255),2)
+
+        cv2.imshow('Match', disp)
+        cv2.imshow('Template', original_map[selected] if detections else np.zeros_like(original_map[selected]))
+
+        key = cv2.waitKey(1)&0xFF
+        if key == ord('q'):
+            quit_program = True
+            break
+        if key == ord('r'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+    # record data for this pattern
+    if total_frames > 0:
+        accuracy   = correct_frames/total_frames*100
+        avg_lat    = sum_latency/correct_frames if correct_frames else 0
+        avg_cpu    = sum_cpu/correct_frames if correct_frames else 0
+        avg_mem_mb = (sum_mem/correct_frames)/(1024*1024) if correct_frames else 0
+        with open(csv_file,'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([selected, "", total_frames, correct_frames,
+                             f"{accuracy:.2f}", f"{avg_lat:.1f}", f"{avg_cpu:.1f}", f"{avg_mem_mb:.2f}"])
+
+    if quit_program:
+        break
+    # else auto_reset or manual 'r' leads back to selection
