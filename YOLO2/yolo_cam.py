@@ -7,26 +7,26 @@ cap = cv2.VideoCapture(0)
 cap.set(3, 640)  # Set width
 cap.set(4, 480)  # Set height
 
-<<<<<<< HEAD
-# model
-model = YOLO("multiclass_det_03-26-25.pt")
-
-# object classes
-classNames = ["Pattern 1", "Pattern 2", "Pattern 3", "Pattern 4", "Pattern 5", "Pattern 6", "Pattern 7"]
-# classNames = ["Pattern 0", "Pattern 1", "Pattern 2"]
-<<<<<<< HEAD
-=======
 # Load model
-model = YOLO("content/YOLOV11_det/yolov11_det/weights/best.pt")
+model = YOLO("Gtapenail2/weights/best.pt")
 
 # Object classes
-classNames = ["Pattern"]
+classNames = ["Pattern 1", "Pattern 2", "Pattern 3", "Pattern 4",
+              "Pattern 5", "Pattern 6", "Pattern 7"]
+
+# Assign a distinct BGR color per class
+COLORS = [
+    (255, 0, 255),  # magenta
+    (0, 255, 0),    # green
+    (0, 255, 255),  # yellow
+    (255, 0, 0),    # blue
+    (0, 165, 255),  # orange
+    (255, 255, 0),  # cyan
+    (128, 0, 128),  # purple
+]
 
 # Confidence threshold
-CONFIDENCE_THRESHOLD = 0.5  # Set the minimum confidence score
->>>>>>> parent of 36d8075 (multiclass working and authentication working.)
-=======
->>>>>>> 4c6a3fceb7123e77680acc2897a8db8ad1f770d6
+CONFIDENCE_THRESHOLD = 0.5
 
 while True:
     success, img = cap.read()
@@ -34,50 +34,62 @@ while True:
         break
 
     results = model(img, stream=True)
-    # print("Results Shape --->", results.shape())
 
-    # Coordinates
-    y_offset = 10  # Offset for displaying cutouts
-    cutout_size = 100  # Size of extracted object display
-    x_cutout_pos = img.shape[1] - cutout_size - 10  # Position to place cutouts on the right side
+    # Prepare cutout display offsets
+    y_offset = 10
+    cutout_size = 100
+    x_cutout_pos = img.shape[1] - cutout_size - 10
 
     for r in results:
         boxes = r.boxes
-
         for box in boxes:
-            # Confidence
-            confidence = round(box.conf[0].item(), 2)
+            confidence = float(box.conf[0].item())
+            if confidence < CONFIDENCE_THRESHOLD:
+                continue
 
-            # Only process if confidence is above threshold
-            if confidence >= CONFIDENCE_THRESHOLD:
-                print("Confidence --->", confidence)
+            # Box coordinates
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-                # Bounding box
-                x1, y1, x2, y2 = map(int, box.xyxy[0])  # Convert to int values
+            # Class index
+            cls = int(box.cls[0].item())
+            label = f"{classNames[cls]} {confidence:.2f}"
 
-                # Draw bounding box
-                cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 255), 3)
+            # Pick color for this class
+            color = COLORS[cls % len(COLORS)]
 
-                # Class name
-                cls = int(box.cls[0])
-                print("Class name -->", classNames[cls])
+            # Draw bounding box
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, 3)
 
-                # Display class and confidence on bounding box
-                label = f"{classNames[cls]} {confidence}"
-                cv2.putText(img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+            # Compute text size & position
+            (tw, th), baseline = cv2.getTextSize(label,
+                                                 cv2.FONT_HERSHEY_SIMPLEX,
+                                                 0.6, 2)
+            text_x = x1
+            text_y = max(y1 - 10, th + 10)
 
-                # Extract object cutout
-                cutout = img[y1:y2, x1:x2]
-                if cutout.size != 0:
-                    cutout = cv2.resize(cutout, (cutout_size, cutout_size))  # Resize cutout
-                    img[y_offset:y_offset + cutout_size, x_cutout_pos:x_cutout_pos + cutout_size] = cutout  # Place cutout on right side
+            # Draw filled rectangle behind text for readability
+            cv2.rectangle(img,
+                          (text_x, text_y - th - baseline),
+                          (text_x + tw, text_y + baseline),
+                          color, cv2.FILLED)
 
-                    # Draw border around cutout only
-                    cv2.rectangle(img, (x_cutout_pos, y_offset), (x_cutout_pos + cutout_size, y_offset + cutout_size),
-                                  (0, 255, 0), 2)
+            # Put class name + confidence above box
+            cv2.putText(img, label, (text_x, text_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (255, 255, 255), 2)
 
-                    # Adjust offset for next object
-                    y_offset += cutout_size + 10
+            # Extract and show cutout
+            cutout = img[y1:y2, x1:x2]
+            if cutout.size:
+                cut = cv2.resize(cutout, (cutout_size, cutout_size))
+                img[y_offset:y_offset + cutout_size,
+                    x_cutout_pos:x_cutout_pos + cutout_size] = cut
+                cv2.rectangle(img,
+                              (x_cutout_pos, y_offset),
+                              (x_cutout_pos + cutout_size,
+                               y_offset + cutout_size),
+                              (0, 255, 0), 2)
+                y_offset += cutout_size + 10
 
     cv2.imshow('Webcam', img)
     if cv2.waitKey(1) == ord('q'):

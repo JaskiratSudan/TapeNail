@@ -1,7 +1,6 @@
-description: Ultralytics YOLO11n model trained on /content/drive/MyDrive/Prof. Xiao
-  Zhang TAI Lab/Tape Nail/YOLO2/data.yaml
+description: Ultralytics YOLO11n model trained on /home/hasky/Downloads/Gtape/data/data.yaml
 author: Ultralytics
-date: '2025-05-20T15:52:37.773611'
+date: '2025-05-22T14:00:17.574613'
 version: 8.3.78
 license: AGPL-3.0 License (https://ultralytics.com/license)
 docs: https://docs.ultralytics.com
@@ -12,7 +11,7 @@ imgsz:
 - 256
 - 256
 names:
-  0: Pattern
+  0: pattern
 args:
   batch: 1
   half: false

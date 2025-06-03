@@ -3,7 +3,7 @@ import numpy as np
 import tensorflow.lite as tflite
 
 # Load the TFLite model
-model_path = 'content/YOLOv11_det_640/yolov11_det_640/weights/best_saved_model/best_float16.tflite'  # Replace with your TFLite model path
+model_path = 'Hasky_yolo/weights/best_saved_model/hasky_model_float16.tflite'  # Replace with your TFLite model path
 interpreter = tflite.Interpreter(model_path=model_path)
 interpreter.allocate_tensors()
 
