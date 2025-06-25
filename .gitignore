@@ -8,3 +8,4 @@
 *.bmp
 *.tiff
 *.DS_Store
+__pycache__
