@@ -9,8 +9,8 @@
 | Folder                     | Description                     |
 |---------------------------|---------------------------------|
 | `ANDROID_APP/`            | Mobile app code |
-| `PROOF_OF_CONCEPT/`       | Prototype code  |
-| `TAPENAIL DOCUMENTS & OTHER/` | Docs, drafts, figures, notes     |
+| `SCRIPTS/`       | Prototype code  |
+| `DOCUMENTS/` | Docs, drafts, figures, notes     |
 | `TAPENAIL_YOLO/`          | YOLO-based pattern detection    |
 
 ---
