@@ -1,0 +1,23 @@
+description: Ultralytics YOLO11n model trained on /home/hasky/Desktop/tapenail/newtape/tapenail_new/DATA/tapenail_new.v2-new-data.yolov11/data.yaml
+author: Ultralytics
+date: '2025-06-04T09:56:28.537367'
+version: 8.3.78
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 256
+- 256
+names:
+  0: pattern_1
+  1: pattern_2
+  2: pattern_3
+  3: pattern_4
+  4: pattern_5
+args:
+  batch: 1
+  half: false
+  int8: false
+  nms: false
