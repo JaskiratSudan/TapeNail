@@ -1,0 +1,6 @@
+train: /Users/jaskirat-sudan/Library/CloudStorage/GoogleDrive-jsudan@umich.edu/My Drive/Prof. Xiao Zhang TAI Lab/Tape Nail/YOLO/datasets/Pattern Segmentation yolo v8/train/images
+val: /Users/jaskirat-sudan/Library/CloudStorage/GoogleDrive-jsudan@umich.edu/My Drive/Prof. Xiao Zhang TAI Lab/Tape Nail/YOLO/datasets/Pattern Segmentation yolo v8/valid/images
+test: /Users/jaskirat-sudan/Library/CloudStorage/GoogleDrive-jsudan@umich.edu/My Drive/Prof. Xiao Zhang TAI Lab/Tape Nail/YOLO/datasets/Pattern Segmentation yolo v8/test/images
+
+names: 
+  0: Pattern

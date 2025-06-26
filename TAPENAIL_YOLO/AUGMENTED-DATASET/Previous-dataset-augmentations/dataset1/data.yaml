@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 7
+names: ['pattern_1', 'pattern_2', 'pattern_3', 'pattern_4', 'pattern_5', 'pattern_6', 'pattern_7']
+
+roboflow:
+  workspace: tapenailproject
+  project: my-first-project-sqknj
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/tapenailproject/my-first-project-sqknj/dataset/1

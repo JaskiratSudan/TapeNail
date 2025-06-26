@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 3
+names: ['pattern_1', 'pattern_2', 'pattern_3']
+
+roboflow:
+  workspace: tapenail
+  project: tapenail
+  version: 7
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/tapenail/tapenail/dataset/7
