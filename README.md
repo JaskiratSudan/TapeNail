@@ -11,6 +11,7 @@
 | `Android_App/`            | Mobile app code |
 | `Scripts/`       | Prototype code  |
 | `DOCUMENTS/` | Docs, drafts, figures, notes     |
+| `TAPENAIL_test/`          | App-yolo integration test    |
 | `TAPENAIL_YOLO/`          | YOLO-based pattern detection    |
 
 ---
