@@ -1,6 +1,0 @@
-train: /Users/jaskirat-sudan/Library/CloudStorage/GoogleDrive-jsudan@umich.edu/My Drive/Prof. Xiao Zhang TAI Lab/Tape Nail/YOLO/yolo_dataset/images/train
-val: /Users/jaskirat-sudan/Library/CloudStorage/GoogleDrive-jsudan@umich.edu/My Drive/Prof. Xiao Zhang TAI Lab/Tape Nail/YOLO/yolo_dataset/images/val
-test: /Users/jaskirat-sudan/Library/CloudStorage/GoogleDrive-jsudan@umich.edu/My Drive/Prof. Xiao Zhang TAI Lab/Tape Nail/YOLO/yolo_dataset/images/test
-
-nc: 1
-names: ["pattern"]
